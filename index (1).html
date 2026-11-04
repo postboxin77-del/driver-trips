@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="theme-color" content="#0b3d91">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>My Tasks</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; background: #f4f5f7; color: #1d2433; }
+  header { background: #0b3d91; color: #fff; padding: 18px 20px; }
+  header .hi { font-size: 14px; opacity: .85; }
+  header .name { font-size: 22px; font-weight: 600; margin-top: 2px; }
+  main { padding: 16px; max-width: 480px; margin: 0 auto; }
+  .card { background: #fff; border-radius: 14px; padding: 18px; margin-bottom: 14px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  label { display: block; font-size: 14px; color: #5b6475; margin: 12px 0 6px; }
+  select, input { width: 100%; font-size: 17px; padding: 12px; border: 1px solid #cfd5df; border-radius: 10px; background: #fff; color: #1d2433; }
+  .btn { width: 100%; border: 0; border-radius: 14px; font-size: 24px; font-weight: 700; padding: 22px; margin-top: 18px; color: #fff; cursor: pointer; }
+  .btn:disabled { opacity: .5; }
+  .start { background: #1a8f4c; }
+  .end { background: #c62828; }
+  .running { font-size: 13px; letter-spacing: .08em; color: #c62828; font-weight: 700; }
+  .task { font-size: 22px; font-weight: 600; margin-top: 6px; }
+  .loc { color: #5b6475; margin-top: 2px; }
+  .timer { font-size: 46px; font-weight: 700; text-align: center; margin: 18px 0 2px; font-variant-numeric: tabular-nums; }
+  .since { text-align: center; color: #5b6475; font-size: 14px; }
+  .msg { padding: 14px; border-radius: 10px; margin-bottom: 14px; display: none; font-size: 15px; }
+  .err { background: #fdecea; color: #8a1c1c; }
+  .ok { background: #e6f4ea; color: #1a5e34; }
+  h3 { margin: 0 0 6px; font-size: 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  td { padding: 8px 4px; border-top: 1px solid #eef0f3; vertical-align: top; }
+  .muted { color: #8a93a3; font-size: 14px; }
+  .tag { font-size: 12px; padding: 2px 8px; border-radius: 8px; }
+  .t-Open { background: #fdecea; color: #8a1c1c; }
+  .t-Closed { background: #e6f4ea; color: #1a5e34; }
+  .t-Check { background: #fff4e0; color: #8a5a00; }
+</style>
+</head>
+<body>
+<header>
+  <div class="hi">Driver trip log</div>
+  <div class="name" id="name">Loading…</div>
+</header>
+
+<main>
+  <div id="msg" class="msg"></div>
+
+  <div id="startView" class="card" style="display:none">
+    <label for="task">Task</label>
+    <select id="task"></select>
+    <label for="loc">Location</label>
+    <select id="loc"></select>
+    <button class="btn start" id="startBtn" onclick="doStart()">START</button>
+  </div>
+
+  <div id="runView" class="card" style="display:none">
+    <div class="running">● TASK RUNNING</div>
+    <div class="task" id="rTask"></div>
+    <div class="loc" id="rLoc"></div>
+    <div class="timer" id="timer">0:00:00</div>
+    <div class="since" id="since"></div>
+    <label for="remarks">Remarks (optional)</label>
+    <input id="remarks" maxlength="300" placeholder="Handed to store manager">
+    <button class="btn end" id="endBtn" onclick="doEnd()">END</button>
+  </div>
+
+  <div class="card">
+    <h3>Today</h3>
+    <div id="today" class="muted">No trips yet today.</div>
+  </div>
+</main>
+
+<script>
+  // Your Apps Script Web app URL (ending in /exec)
+  const API = 'https://script.google.com/macros/s/AKfycbwCNwl35yRHNRpTCs7813Pie7CN2srFN9XbUO5E5StcsjSkrKIgBmmkLgjxQ2hDtIha/exec';
+
+  const CODE = new URLSearchParams(location.search).get('d') || '';
+  let timerId = null;
+
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+  function show(text, type) {
+    const el = $('msg');
+    el.textContent = text || '';
+    el.className = 'msg ' + (type || '');
+    el.style.display = text ? 'block' : 'none';
+  }
+
+  function api(params) {
+    params.d = CODE;
+    params.t = Date.now();
+    return fetch(API + '?' + new URLSearchParams(params))
+      .then(r => { if (!r.ok) throw new Error('Server error. Try again.'); return r.json(); })
+      .catch(e => { throw new Error(e.message === 'Failed to fetch' ? 'No connection. Check your internet and try again.' : e.message); });
+  }
+
+  function fill(sel, items) {
+    const current = sel.value;
+    sel.innerHTML = '<option value="">Choose…</option>' + items.map(i => '<option>' + esc(i) + '</option>').join('');
+    if (items.indexOf(current) > -1) sel.value = current;
+  }
+
+  function tick(start) {
+    const sec = Math.max(0, Math.floor((Date.now() - start) / 1000));
+    const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+    $('timer').textContent = h + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+  }
+
+  function render(state) {
+    if (state.error) {
+      $('name').textContent = 'Link not valid';
+      $('startView').style.display = 'none';
+      $('runView').style.display = 'none';
+      show(state.error, 'err');
+      return;
+    }
+    $('name').textContent = state.driver;
+    clearInterval(timerId);
+
+    if (state.open) {
+      $('rTask').textContent = state.open.task;
+      $('rLoc').textContent = state.open.location;
+      $('since').textContent = 'Started at ' + new Date(state.open.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      tick(state.open.start);
+      timerId = setInterval(() => tick(state.open.start), 1000);
+      $('startView').style.display = 'none';
+      $('runView').style.display = 'block';
+    } else {
+      fill($('task'), state.tasks);
+      fill($('loc'), state.locations);
+      $('runView').style.display = 'none';
+      $('startView').style.display = 'block';
+    }
+
+    if (!state.today.length) {
+      $('today').innerHTML = 'No trips yet today.';
+      $('today').className = 'muted';
+    } else {
+      $('today').className = '';
+      $('today').innerHTML = '<table>' + state.today.map(t =>
+        '<tr><td>' + esc(t.start) + (t.end ? ' - ' + esc(t.end) : '') + '</td>' +
+        '<td>' + esc(t.task) + '<div class="muted">' + esc(t.location) + '</div></td>' +
+        '<td style="text-align:right">' + (t.mins !== '' ? esc(t.mins) + ' min<br>' : '') +
+        '<span class="tag t-' + esc(t.status) + '">' + esc(t.status === 'Open' ? 'Running' : t.status) + '</span></td></tr>'
+      ).join('') + '</table>';
+    }
+  }
+
+  function load() {
+    if (!CODE) { render({ error: 'This link is not valid. Ask the office for your personal link.' }); return; }
+    api({ action: 'state' }).then(render).catch(e => show(e.message, 'err'));
+  }
+
+  function doStart() {
+    const task = $('task').value, loc = $('loc').value;
+    if (!task || !loc) { show('Choose the task and the location.', 'err'); return; }
+    const btn = $('startBtn');
+    btn.disabled = true; btn.textContent = 'Starting…';
+    api({ action: 'start', task: task, loc: loc })
+      .then(s => {
+        if (s.actionError) { show(s.actionError, 'err'); load(); return; }
+        show('Task started. Drive safe.', 'ok'); render(s);
+      })
+      .catch(e => show(e.message, 'err'))
+      .finally(() => { btn.disabled = false; btn.textContent = 'START'; });
+  }
+
+  function doEnd() {
+    if (!confirm('End this task?')) return;
+    const btn = $('endBtn');
+    btn.disabled = true; btn.textContent = 'Ending…';
+    api({ action: 'end', remarks: $('remarks').value })
+      .then(s => {
+        if (s.actionError) { show(s.actionError, 'err'); load(); return; }
+        $('remarks').value = ''; show('Task ended.', 'ok'); render(s);
+      })
+      .catch(e => show(e.message, 'err'))
+      .finally(() => { btn.disabled = false; btn.textContent = 'END'; });
+  }
+
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+  load();
+</script>
+</body>
+</html>
